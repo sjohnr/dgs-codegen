@@ -25,10 +25,12 @@ import com.squareup.javapoet.CodeBlock
 import com.squareup.javapoet.JavaFile
 import com.squareup.javapoet.MethodSpec
 import com.squareup.javapoet.ParameterizedTypeName
+import com.squareup.javapoet.TypeName
 import com.squareup.javapoet.TypeSpec
 import com.squareup.javapoet.WildcardTypeName
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertDoesNotThrow
@@ -265,6 +267,219 @@ class CodeGenTest {
         assertThat(typeSpec.fieldSpecs[1].type.toString()).isEqualTo("java.util.List<java.lang.Boolean>")
         assertThat(typeSpec.fieldSpecs[2].type.toString()).isEqualTo("java.util.List<java.lang.Double>")
     }
+
+    @Test
+    fun `When generateJSpecifyAnnotations is enabled, primitive types should be annotated in fields, constructors, getters and setters`() {
+        val schema =
+            """
+            type MyType {
+                count: Int
+                truth: Boolean!
+            }
+            """.trimIndent()
+
+        val (dataTypes) =
+            CodeGen(
+                CodeGenConfig(
+                    schemas = setOf(schema),
+                    packageName = BASE_PACKAGE_NAME,
+                    generateBoxedTypes = true,
+                    generateJSpecifyAnnotations = true,
+                ),
+            ).generate()
+
+        val typeSpec = dataTypes[0].typeSpec
+        // With @NullMarked, the class is annotated and non-null is the default
+        assertThat(typeSpec.annotations).matches(hasJspecifyNullMarkedAnnotation())
+
+        // Fields: nullable ones have @Nullable, non-null ones have no annotation (default non-null)
+        assertThat(typeSpec.fieldSpecs[0].annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(typeSpec.fieldSpecs[1].annotations).isEmpty() // non-null by default with @NullMarked
+
+        val allArgsConstructor =
+            typeSpec.methodSpecs.find { it.isConstructor && it.parameters.isNotEmpty() }
+                ?: Assertions.fail("Unable to find all args constructor")
+        assertThat(allArgsConstructor.parameters[0].annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(allArgsConstructor.parameters[1].annotations).isEmpty() // non-null by default with @NullMarked
+
+        val methodSpecs = typeSpec.methodSpecs.associateBy { it.name }
+        assertThat(methodSpecs["getCount"]!!.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(methodSpecs["getTruth"]!!.annotations).isEmpty() // non-null by default with @NullMarked
+
+        assertThat(methodSpecs["setCount"]!!.parameters[0].annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(methodSpecs["setTruth"]!!.parameters[0].annotations).isEmpty() // non-null by default with @NullMarked
+    }
+
+    @Test
+    fun `When generateJSpecifyAnnotations is enabled, list types should be annotated in fields, constructors, getters and setters`() {
+        val schema =
+            """
+            type MyType {
+                count: [Int]
+                truth: [Boolean!]
+                floaty: [Float!]!
+            }
+            """.trimIndent()
+
+        val (dataTypes) =
+            CodeGen(
+                CodeGenConfig(
+                    schemas = setOf(schema),
+                    packageName = BASE_PACKAGE_NAME,
+                    generateJSpecifyAnnotations = true,
+                ),
+            ).generate()
+
+        val typeSpec = dataTypes[0].typeSpec
+        // With @NullMarked, the class is annotated
+        assertThat(typeSpec.annotations).matches(hasJspecifyNullMarkedAnnotation())
+
+        val countField = typeSpec.fieldSpecs[0]
+        assertThat(countField.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(countField.type).matches(jspecifyAnnotatedListField("Integer", true))
+
+        val truthField = typeSpec.fieldSpecs[1]
+        assertThat(truthField.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(truthField.type).matches(jspecifyAnnotatedListField("Boolean", false))
+
+        val floatyField = typeSpec.fieldSpecs[2]
+        assertThat(floatyField.annotations).isEmpty() // non-null by default with @NullMarked
+        assertThat(floatyField.type).matches(jspecifyAnnotatedListField("Double", false))
+
+        val allArgsConstructor =
+            typeSpec.methodSpecs.find { it.isConstructor && it.parameters.isNotEmpty() }
+                ?: Assertions.fail("Unable to find all args constructor")
+        val countConstructorParameter = allArgsConstructor.parameters[0]
+        assertThat(countConstructorParameter.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(countConstructorParameter.type).matches(jspecifyAnnotatedListField("Integer", true))
+
+        val truthConstructorParameter = allArgsConstructor.parameters[1]
+        assertThat(truthConstructorParameter.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(truthConstructorParameter.type).matches(jspecifyAnnotatedListField("Boolean", false))
+
+        val floatyConstructorParameter = allArgsConstructor.parameters[2]
+        assertThat(floatyConstructorParameter.annotations).isEmpty() // non-null by default with @NullMarked
+        assertThat(floatyConstructorParameter.type).matches(jspecifyAnnotatedListField("Double", false))
+
+        val methodSpecs = typeSpec.methodSpecs.associateBy { it.name }
+        val getCountMethod = methodSpecs["getCount"]!!
+        assertThat(getCountMethod.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(getCountMethod.returnType).matches(jspecifyAnnotatedListField("Integer", true))
+
+        val getTruthMethod = methodSpecs["getTruth"]!!
+        assertThat(getTruthMethod.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(getTruthMethod.returnType).matches(jspecifyAnnotatedListField("Boolean", false))
+
+        val getFloatyMethod = methodSpecs["getFloaty"]!!
+        assertThat(getFloatyMethod.annotations).isEmpty() // non-null by default with @NullMarked
+        assertThat(getFloatyMethod.returnType).matches(jspecifyAnnotatedListField("Double", false))
+
+        val setCountParameter = methodSpecs["setCount"]!!.parameters[0]
+        assertThat(setCountParameter.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(setCountParameter.type).matches(jspecifyAnnotatedListField("Integer", true))
+
+        val setTruthParameter = methodSpecs["setTruth"]!!.parameters[0]
+        assertThat(setTruthParameter.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(setTruthParameter.type).matches(jspecifyAnnotatedListField("Boolean", false))
+
+        val setFloatyParameter = methodSpecs["setFloaty"]!!.parameters[0]
+        assertThat(setFloatyParameter.annotations).isEmpty() // non-null by default with @NullMarked
+        assertThat(setFloatyParameter.type).matches(jspecifyAnnotatedListField("Double", false))
+    }
+
+    @Test
+    fun `When generateJSpecifyAnnotations is enabled with generateInterfaces, interfaces should have proper annotations`() {
+        val schema =
+            """
+            type Query {
+                search: [Result]
+            }
+
+            interface Result {
+                id: ID!
+                name: String
+                score: Int
+            }
+
+            type Movie implements Result {
+                id: ID!
+                name: String
+                score: Int
+                director: String!
+                rating: Float
+            }
+            """.trimIndent()
+
+        val codeGenResult =
+            CodeGen(
+                CodeGenConfig(
+                    schemas = setOf(schema),
+                    packageName = BASE_PACKAGE_NAME,
+                    generateInterfaces = true,
+                    generateJSpecifyAnnotations = true,
+                ),
+            ).generate()
+
+        // Verify the GraphQL interface (Result) has @NullMarked
+        val resultInterface =
+            codeGenResult.javaInterfaces.find { it.typeSpec.name == "Result" }
+                ?: Assertions.fail("Unable to find Result interface")
+        val resultInterfaceSpec = resultInterface.typeSpec
+
+        // GraphQL interface should have @NullMarked
+        assertThat(resultInterfaceSpec.annotations).matches(hasJspecifyNullMarkedAnnotation())
+
+        // Methods should have @Nullable only for nullable returns (non-null is default with @NullMarked)
+        val resultInterfaceMethodSpecs = resultInterfaceSpec.methodSpecs.associateBy { it.name }
+        assertThat(resultInterfaceMethodSpecs["getId"]!!.annotations).isEmpty() // non-null by default
+        assertThat(resultInterfaceMethodSpecs["getName"]!!.annotations).matches(hasJspecifyNullableAnnotation())
+        assertThat(resultInterfaceMethodSpecs["getScore"]!!.annotations).matches(hasJspecifyNullableAnnotation())
+
+        // Verify the concrete type interface (IMovie) has @NullMarked
+        val movieInterface =
+            codeGenResult.javaInterfaces.find { it.typeSpec.name == "IMovie" }
+                ?: Assertions.fail("Unable to find IMovie interface")
+        val movieInterfaceSpec = movieInterface.typeSpec
+
+        // Concrete type interface should have @NullMarked
+        assertThat(movieInterfaceSpec.annotations).matches(hasJspecifyNullMarkedAnnotation())
+
+        // IMovie should only have methods for fields not inherited from Result
+        val movieInterfaceMethodSpecs = movieInterfaceSpec.methodSpecs.associateBy { it.name }
+        assertThat(movieInterfaceMethodSpecs["getDirector"]!!.annotations).isEmpty() // non-null by default
+        assertThat(movieInterfaceMethodSpecs["getRating"]!!.annotations).matches(hasJspecifyNullableAnnotation())
+
+        // Verify the implementing type also has @NullMarked
+        val movieType =
+            codeGenResult.javaDataTypes.find { it.typeSpec.name == "Movie" }
+                ?: Assertions.fail("Unable to find Movie data type")
+        assertThat(movieType.typeSpec.annotations).matches(hasJspecifyNullMarkedAnnotation())
+
+        assertCompilesJava(codeGenResult.javaDataTypes + codeGenResult.javaInterfaces)
+    }
+
+    private fun hasJspecifyNullMarkedAnnotation(): (List<AnnotationSpec>) -> Boolean = hasJspecifyAnnotation("NullMarked")
+
+    private fun hasJspecifyNullableAnnotation(): (List<AnnotationSpec>) -> Boolean = hasJspecifyAnnotation("Nullable")
+
+    private fun hasJspecifyAnnotation(annotation: String): (List<AnnotationSpec>) -> Boolean =
+        { annotations ->
+            annotations.map { it.toString() }.contains("@org.jspecify.annotations.$annotation")
+        }
+
+    private fun jspecifyAnnotatedListField(
+        boxedType: String,
+        nullable: Boolean,
+    ): (TypeName) -> Boolean =
+        { typeName ->
+            if (nullable) {
+                // Nullable elements have @Nullable annotation
+                typeName.toString() == "java.util.List<java.lang. @org.jspecify.annotations.Nullable $boxedType>"
+            } else {
+                // With @NullMarked, non-null elements don't need annotation (default is non-null)
+                typeName.toString() == "java.util.List<java.lang.$boxedType>"
+            }
+        }
 
     @Test
     fun generateDataClassWithoutAllConstructor() {
